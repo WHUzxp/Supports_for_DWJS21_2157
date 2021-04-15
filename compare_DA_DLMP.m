@@ -1,0 +1,57 @@
+clear
+clc
+N=50;%电动汽车数量
+%电价数据
+load DLMP_data
+a_data=[a_data(9:24);a_data(1:8)];b_data=[b_data(9:24);b_data(1:8)];
+%电动汽车聚类数据(08:00-09:00为时段1)
+EVdata=[6,40,15,10,24,105;6,32,16,2,9,132;3,24,8,11,23,89;6,24,12,13,22,97;6,40,25,1,8,101;6,40,16,12,23,175;3,24,8,10,24,35;10,40,20,2,8,88;10,40,18,11,24,112;10,64,25,11,23,66];
+xiaoyong=ones(10,24);
+ratio=EVdata(:,6)/1000;%经验分布
+%电动汽车状态矩阵
+X=zeros(24,10);Y=zeros(24,10);
+for i=1:10
+    X(EVdata(i,4):EVdata(i,5),i)=1;%电动汽车停泊矩阵
+end
+%建模
+price_EV=sdpvar(24,1);KKTsystem=[];
+pch=sdpvar(24,10);%电动汽车充电
+pdis=sdpvar(24,10);%电动汽车放电
+S_EV=sdpvar(24,10);%电动汽车电量状态
+for n=1:10
+    obj_DR=price_EV'*(pch(:,n)-pdis(:,n))-xiaoyong(n,:)*(0.95*pch(:,n)-pdis(:,n)/0.95);%电动汽车目标函数
+    C_EV=[0<=pch(:,n)<=ones(24,1)*EVdata(n,1).*X(:,n),0<=pdis(:,n)<=ones(24,1)*EVdata(n,1).*X(:,n),
+        0.2*ones(24,1)*EVdata(n,2).*X(:,n)<=S_EV(:,n)<=0.95*ones(24,1)*EVdata(n,2).*X(:,n)];%电动汽车边界约束条件
+    C_EV=[C_EV,S_EV(EVdata(n,4)+1:EVdata(n,5),n)==S_EV(EVdata(n,4):EVdata(n,5)-1,n)+0.95*pch(EVdata(n,4)+1:EVdata(n,5),n)-pdis(EVdata(n,4)+1:EVdata(n,5),n)/0.95,
+        S_EV(EVdata(n,4),n)==EVdata(n,3)+0.95*pch(EVdata(n,4),n)-pdis(EVdata(n,4),n)/0.95,
+        S_EV(EVdata(n,5),n)==0.95*EVdata(n,2)];%电动汽车电量约束条件
+    ops=sdpsettings('kkt.dualbound',0);%不进行对偶边界估计
+    [KKTsystem_single,details]=kkt(C_EV,obj_DR,price_EV,ops);%将电动汽车问题转化为KKT系统
+    KKTsystem=[KKTsystem,KKTsystem_single];%合成KKT系统
+    obj_EV(n)=xiaoyong(n,:)*(0.95*pch(:,n)-pdis(:,n)/0.95)-(details.b'*details.dual+details.f'*details.dualeq);
+end
+Pch=sdpvar(24,1);%储能系统充电
+Pdis=sdpvar(24,1);%储能系统放电
+S_ESS=sdpvar(24,1);%储能系统电量状态
+Ps=sdpvar(24,1);%充电站与电网的交换功率
+price_E=a_data.*Ps+b_data;%节点边际电价
+C_price=[mean(price_EV)<=mean(price_E),0.8*price_E<=price_EV<=1.2*price_E];%零售电价约束条件
+C_ESS=[0<=Pch<=250,0<=Pdis<=250,200<=S_ESS<=950,
+    S_ESS(1,:)==500+0.95*Pch(1,:)-Pdis(1,:)/0.95,
+    S_ESS(2:24,:)==S_ESS(1:23,:)+0.95*Pch(2:24,:)-Pdis(2:24,:)/0.95,
+    S_ESS(24,:)==500];%储能系统约束条件
+C_CS=[-1000<=Ps<=1000,Ps+Pdis+N*pdis*ratio==Pch+N*pch*ratio];%零售商约束条件
+Constraints=[C_price,C_ESS,C_CS,KKTsystem];%总的约束条件
+obj1=-price_E'*Ps+N*obj_EV*ratio;
+obj2=-b_data'*Ps+N*obj_EV*ratio;
+result=optimize(Constraints,-obj1,ops)%求解最大化问题
+Ps1=double([Ps(17:24);Ps(1:16)]);
+result=optimize(Constraints,-obj2,ops)%求解最大化问题
+Ps2=double([Ps(17:24);Ps(1:16)]);
+Load=3715*[0.710760795065113;0.673577793008910;0.663982179575052;0.660726525017135;0.668265935572310;0.696024674434544;0.799177518848526;0.932488005483208;1;0.979780671692940;0.930774503084304;0.912268677176148;0.911754626456477;0.877655928718300;0.868060315284442;0.861549006168609;0.845270733379027;0.885538039753256;0.954763536668951;0.968300205620288;0.932488005483208;0.900959561343386;0.841501028101439;0.733036326250857];
+Load_total1=Load+Ps1;
+Load_total2=Load+Ps2;
+plot(Load_total1,'r')
+hold on
+plot(Load)
+plot(Load_total2,'g')
